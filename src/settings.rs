@@ -208,6 +208,9 @@ pub struct ReviewSettings {
     /// Conservative default; set to 0 to disable.
     #[serde(default = "default_max_total_output_tokens")]
     pub max_total_output_tokens: usize,
+    /// Directory containing the review prompts (identity.md, stage-*.md, subsystem/, etc.)
+    #[serde(default = "default_prompts_dir")]
+    pub prompts_dir: String,
     /// Override the review tool binary path. Not read from config; set programmatically
     /// (e.g. in tests or via environment).
     #[serde(skip)]
@@ -238,6 +241,10 @@ fn default_review_timeout() -> u64 {
 
 fn default_max_retries() -> u32 {
     3
+}
+
+fn default_prompts_dir() -> String {
+    "third_party/prompts/kernel".to_string()
 }
 
 fn default_log_level() -> String {

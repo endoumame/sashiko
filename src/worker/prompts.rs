@@ -122,14 +122,29 @@ impl PromptRegistry {
         let mut clean_files = Vec::new();
         let mut content = String::with_capacity(50_000);
 
-        content.push_str("You are an expert Linux kernel maintainer. Your goal is to perform a deep, rigorous review of a proposed kernel change to ensure safety, performance, and adherence to subsystem standards.\n\n");
+        let identity_path = self.base_dir.join("identity.md");
+        let identity_text = if identity_path.exists() {
+            fs::read_to_string(&identity_path).await.unwrap_or_else(|_| {
+                "You are an expert code reviewer. Your goal is to perform a deep, rigorous review of a proposed code change.\n".to_string()
+            })
+        } else {
+            "You are an expert Linux kernel maintainer. Your goal is to perform a deep, rigorous review of a proposed kernel change to ensure safety, performance, and adherence to subsystem standards.\n".to_string()
+        };
+
+        content.push_str(&identity_text);
+        content.push_str("\n");
         content.push_str("TOOL USAGE: When you need to gather information using tools, actively batch parallel or independent tool calls into a single response to minimize the number of conversation turns.\n\n");
         content.push_str("<global_review_guidelines>\n");
         content.push_str("The following documents contain the official technical patterns, architectural rules, and subsystem-specific guidelines that you MUST adhere to during your review. Use these as the absolute source of truth for identifying anti-patterns and violations.\n\n");
-        clean.push_str("You are an expert Linux kernel maintainer. Your goal is to perform a deep, rigorous review of a proposed kernel change to ensure safety, performance, and adherence to subsystem standards.\n\n");
+        clean.push_str(&identity_text);
+        clean.push_str("\n");
         clean.push_str("TOOL USAGE: When you need to gather information using tools, actively batch parallel or independent tool calls into a single response to minimize the number of conversation turns.\n\n");
         clean.push_str("<global_review_guidelines>\n");
         clean.push_str("The following documents contain the official technical patterns, architectural rules, and subsystem-specific guidelines that you MUST adhere to during your review. Use these as the absolute source of truth for identifying anti-patterns and violations.\n\n");
+
+        // Load technical-patterns.md into global context if it exists
+        self.append_file(&mut content, &mut clean_files, "technical-patterns.md")
+            .await?;
 
         // Subsystem Guidelines
         let subsystem_dir = self.base_dir.join("subsystem");
@@ -173,86 +188,23 @@ impl PromptRegistry {
     }
 
     /// Returns the prompt for a specific stage, including any corresponding guidance files.
+    /// Stage instructions are loaded from `stage-{N}.md` files in the prompts directory.
+    /// If no external file exists, built-in defaults (for Linux kernel) are used as fallback.
     pub async fn get_stage_prompt(&self, stage: u8) -> Result<(String, String)> {
         let mut clean = String::with_capacity(10_000);
         let mut clean_files = Vec::new();
         let mut content = String::with_capacity(10_000);
 
-        let stage_instruction = match stage {
-            1 => {
-                "# Stage 1. Analyze commit main goal
-
-You are a senior Linux kernel maintainer evaluating the high-level intent of a proposed commit. Analyze the commit message and the conceptual change. Focus on the big picture: Are there architectural flaws, UAPI breakages, backwards compatibility issues, or fundamentally flawed concepts? Consider the long-term maintainability and system-wide implications of this design. If the core idea is dangerous, incorrect, or violates established kernel principles, raise a concern. Be open-minded but thorough; question assumptions made by the author and consider alternative, simpler designs."
-            }
-            2 => {
-                "# Stage 2. High-level implementation verification
-
-You are verifying if the provided code changes actually implement what the commit message claims. Look for undocumented side-effects, missing pieces (e.g., a core change without updating corresponding callers, or changing a struct without updating all initializers), and unhandled corner cases related to the feature's logic. Explicitly check for missing API callbacks and interface omissions: when defining or modifying structures containing function pointers, verify that all logically required callbacks are implemented. Verify that all claims in the commit message are fully realized in the code. Identify any incomplete implementations, implicit behavioral changes, or API contract violations. Furthermore, verify that the logic is mathematically and semantically sound. Check for off-by-one errors in bounds, incorrect bitwise operations, and verify that all arguments passed to external subsystems (like kobjects or netdevs) are valid and semantically correct (e.g., non-empty strings, correct sizes, correct format specifiers). Don't trust the commit message without verifying each claim. Assume that the message might be incorrect or even intentionally malicious. Do not focus on low-level memory or locking errors yet."
-            }
-            3 => {
-                "# Stage 3. Execution flow verification
-
-You are a static analysis engine tracing execution flow in C or Rust code. Carefully trace the control flow of the provided patch. Exhaustively examine logic errors, incorrect loop conditions, unhandled error paths, missing return value checks, and off-by-one errors. Check every branch, switch statement, and conditional. Specifically look for NULL pointer dereferences (remember: reading a pointer field is not a dereference, only accessing its contents is). Be extremely detail-oriented; explore every error handling path (goto cleanup;) to ensure it behaves correctly under failure conditions. Additionally, verify preprocessor macro correctness and spelling (e.g., ensuring CONFIG_ prefixes are used where expected instead of HAVE_). Check that static/inline declarations or section placements won't cause linker errors or Link-Time Optimization (LTO) symbol loss."
-            }
-            4 => {
-                "# Stage 4. Resource management
-
-You are an expert in C and Rust resource management within the Linux kernel. Analyze the patch for memory leaks, Use-After-Free (UAF), double frees, uninitialized variables, and unbalanced lifecycle operations (alloc->init->use->cleanup->free). Pay special attention to error paths where resources might be leaked. Ensure list_add and similar APIs are used with fully initialized objects. Track the lifetime of every allocated struct and file descriptor. Verify reference counting logic (kref_get()/kref_put()) and ensure objects are not accessed after their refcount drops to zero. Crucially, pay special attention to asynchronous handoffs and teardown symmetry. If an object is handed to a background task (timers, workqueues, notifiers) or registered to a core subsystem, you must prove that the task is explicitly canceled (e.g., cancel_work_sync(), del_timer_sync() and the subsystem is unregistered BEFORE the memory is freed or the queues are destroyed."
-            }
-            5 => {
-                "# Stage 5. Locking and synchronization
-
-You are a world-class concurrency and locking expert auditing a Linux kernel patch.
-Carefully review the proposed patch for ANY locking, concurrency, or synchronization bugs.
-You MUST consider the following categories of issues and report any violations:
-1. Sleeping in atomic context: Are there any calls to `mutex_lock`, `kzalloc` with `GFP_KERNEL`, `msleep`, `cond_resched`, `flush_workqueue`, `synchronize_rcu`, or `cancel_work_sync` while holding a spinlock, rwlock, or within an RCU read-side critical section (`rcu_read_lock`)?
-2. Lock ordering and deadlocks: Are locks acquired in a different order than elsewhere? Does it acquire a mutex while holding another mutex that could cause AB-BA deadlocks? Are IRQs disabled (`spin_lock_irqsave`) when acquiring a lock that is used in hardirq context? Does it acquire a lock already held by a higher-level subsystem (e.g., ethtool)?
-3. Race conditions and lockless access: Are shared variables, list entries, or pointers accessed without holding the appropriate lock? Are there missing memory barriers (`smp_mb`, `smp_wmb`, `smp_rmb`) when lockless access is intended? Are there TOCTOU races where a state is checked outside a lock but relied upon inside?
-4. UAF / Locking Freed Memory: Are locks (`mutex_unlock`, `spin_unlock`) called on objects that have already been freed? Are works/timers destroyed before subsystems are unregistered, allowing new events to use freed works/timers? Is the protocol initialized flag set before private data is ready?
-5. RCU rules: Is `list_splice_init` or similar non-RCU-safe operations used on RCU-protected lists? Is `list_for_each_rcu` used without `rcu_read_lock`?
-6. Unprotected state modifications: Does the patch check state before acquiring the lock (e.g., checking power state before taking mutex)? Are hardware state, flags, or stats updated without proper protection?
-7. Sequence counters: Are stats accumulations directly inside a `u64_stats_fetch_retry` loop leading to double counting? Is it possible for an interrupt to read a sequence counter while the interrupted context is modifying it (deadlock)?
-8. Lock re-initialization: Does it re-initialize a lock that was already initialized, or destroy a lock on a failure path improperly?
-9. Missing locking: Is a port or file exposed to userspace before the driver/TTY linking is complete? Does a worker race with cleanup code leading to dropped/leaked frames?"
-            }
-            6 => {
-                "# Stage 6. Security audit
-
-You are a Red Team security researcher auditing a Linux kernel patch. Look for security vulnerabilities such as buffer overflows, out-of-bounds reads/writes, integer overflows, privilege escalation vectors, time-of-check to time-of-use (TOCTOU) races, and information leaks (e.g., copying uninitialized kernel memory to user-space via copy_to_user). Scrutinize all points where untrusted user input reaches sensitive functions without validation. Ensure all length checks and bounds checks are robust against malicious input. Focus heavily on attack surfaces and data boundaries."
-            }
-            7 => {
-                "# Stage 7. Hardware engineer's review
-
-You are a hardware engineer reviewing device driver changes. If this patch touches driver or hardware-specific code, rigorously review register accesses, IRQ handling, DMA mapping/unmapping, memory barriers, and timing/delays. Look for missing dma_wmb()/dma_rmb() barriers, incorrect endianness conversions (cpu_to_le32), and unsafe DMA buffer allocations. Ensure the hardware state machine is handled correctly, especially during suspend/resume or device reset. Evaluate the physical state machine constraints: verify that clocks and power domains are enabled before registers are accessed, and that hardware rings/queues are actually initialized in the current hardware state before being unconditionally accessed. If the patch is purely generic software logic (e.g., VFS, core networking), output an empty concerns list."
-            }
-            8 => {
-                "# Stage 8. Verification and severity estimation
-
-You are the lead reviewer consolidating feedback from multiple specialized analysts. You will be given a list of concerns generated by different review stages.
-1. Deduplicate identical or overlapping concerns.
-2. Validate each concern and prove the provided reasoning. Report all valid concerns as findings. If necessarily, use tools to gather additional material. Discard all false positives
-3. CRITICAL RULE: To discard a concern as a false positive, you MUST find concrete proof that explicitly invalidates the concern's reasoning. If you cannot find definitive proof that the concern is a false positive, it must be reported as a finding. If you're not sure about something and it's critical in the reasoning validation, make it obvious: if X is possible, then problem Y can occur. Always try to validate if X is possible yourself.
-4. If context from subsequent patches in the series is provided, check if the concern is fixed later in the series. If so, discard it. But don't trust any promises in the commit message if they can't be verified (e.g. something will be fixed by subsequent patches in the series - if you can't prove that it's indeed fixed, report it as a bug).
-5. When referring to other patches within this series in your explanation, DO NOT use git hashes (they are ephemeral/unstable). Instead, refer to them by their patch subject (e.g., 'commit \"mm: fix allocation\"'). Existing historical commits in the tree should still be referenced by their standard hash.
-6. Assign a severity (low, medium, high, critical) to each remaining valid finding and explain the reasoning. Be rigorous in filtering out verifiable noise, but accurately report real logic flaws and edge cases.
-7. If the problem did exist in the code before the patch was applied, say it explicitly: 'This problem wasn't introduced by this patch, but...'. Discard low- and medium-severity pre-existing problems, report only high- and critical severity issues."
-            }
-            9 => {
-                "# Stage 9. LKML-friendly report generation
-
-You are an automated review bot generating a report for the Linux Kernel Mailing List (LKML). Convert the provided JSON findings into a polite, standard, inline-commented LKML email reply. Follow the formatting rules strictly. Do not use markdown headers or ALL CAPS shouting. Ensure the tone is constructive and professional. Do not use backticks to quote any names or expressions."
-            }
-            10 => {
-                "# Stage 10. Fix generation
-
-You are an expert kernel developer writing patches to fix bugs found during review. Generate git-formatted patches to address the provided findings. Ensure the code conforms to kernel style guidelines and compiles cleanly mentally. Double-check that your fixes do not introduce new regressions."
-            }
-            _ => "",
+        let stage_file = self.base_dir.join(format!("stage-{}.md", stage));
+        let stage_instruction = if stage_file.exists() {
+            fs::read_to_string(&stage_file).await.unwrap_or_default()
+        } else {
+            Self::default_stage_instruction(stage).to_string()
         };
 
         if !stage_instruction.is_empty() {
-            content.push_str(stage_instruction);
-            clean.push_str(stage_instruction);
+            content.push_str(&stage_instruction);
+            clean.push_str(&stage_instruction);
             content.push_str("\n\n");
             clean.push_str("\n\n");
         }
@@ -261,12 +213,25 @@ You are an expert kernel developer writing patches to fix bugs found during revi
             3 => {
                 self.append_file(&mut content, &mut clean_files, "callstack.md")
                     .await?;
-                self.append_file(&mut content, &mut clean_files, "technical-patterns.md")
-                    .await?;
+            }
+            4 => {
+                // Load type-guards.md if it exists (for JS/TS/PHP etc.), otherwise pointer-guards.md (kernel)
+                let type_guards = self.base_dir.join("type-guards.md");
+                if type_guards.exists() {
+                    self.append_file(&mut content, &mut clean_files, "type-guards.md")
+                        .await?;
+                } else {
+                    self.append_file(&mut content, &mut clean_files, "pointer-guards.md")
+                        .await?;
+                }
             }
             5 => {
-                self.append_file(&mut content, &mut clean_files, "subsystem/locking.md")
-                    .await?;
+                // Only load locking.md if it exists (kernel-specific)
+                let locking_path = self.base_dir.join("subsystem/locking.md");
+                if locking_path.exists() {
+                    self.append_file(&mut content, &mut clean_files, "subsystem/locking.md")
+                        .await?;
+                }
             }
             8 => {
                 self.append_file(&mut content, &mut clean_files, "false-positive-guide.md")
@@ -363,6 +328,24 @@ You are an expert kernel developer writing patches to fix bugs found during revi
         }
         format!("{:x}", hasher.finalize())
     }
+
+    /// Built-in default stage instructions for backward compatibility (Linux kernel).
+    /// Used when no `stage-{N}.md` file exists in the prompts directory.
+    fn default_stage_instruction(stage: u8) -> &'static str {
+        match stage {
+            1 => "# Stage 1. Analyze commit main goal\n\nYou are a senior Linux kernel maintainer evaluating the high-level intent of a proposed commit. Analyze the commit message and the conceptual change. Focus on the big picture: Are there architectural flaws, UAPI breakages, backwards compatibility issues, or fundamentally flawed concepts? Consider the long-term maintainability and system-wide implications of this design. If the core idea is dangerous, incorrect, or violates established kernel principles, raise a concern. Be open-minded but thorough; question assumptions made by the author and consider alternative, simpler designs.",
+            2 => "# Stage 2. High-level implementation verification\n\nYou are verifying if the provided code changes actually implement what the commit message claims. Look for undocumented side-effects, missing pieces, and unhandled corner cases related to the feature's logic. Verify that all claims in the commit message are fully realized in the code. Identify any incomplete implementations, implicit behavioral changes, or API contract violations. Do not focus on low-level memory or locking errors yet.",
+            3 => "# Stage 3. Execution flow verification\n\nYou are a static analysis engine tracing execution flow in C or Rust code. Carefully trace the control flow of the provided patch. Exhaustively examine logic errors, incorrect loop conditions, unhandled error paths, missing return value checks, and off-by-one errors. Specifically look for NULL pointer dereferences.",
+            4 => "# Stage 4. Resource management\n\nYou are an expert in C and Rust resource management within the Linux kernel. Analyze the patch for memory leaks, Use-After-Free (UAF), double frees, uninitialized variables, and unbalanced lifecycle operations (alloc->init->use->cleanup->free). Pay special attention to error paths where resources might be leaked.",
+            5 => "# Stage 5. Locking and synchronization\n\nYou are a world-class concurrency and locking expert auditing a Linux kernel patch. Carefully review the proposed patch for ANY locking, concurrency, or synchronization bugs.",
+            6 => "# Stage 6. Security audit\n\nYou are a Red Team security researcher auditing a Linux kernel patch. Look for security vulnerabilities such as buffer overflows, out-of-bounds reads/writes, integer overflows, privilege escalation vectors, time-of-check to time-of-use (TOCTOU) races, and information leaks.",
+            7 => "# Stage 7. Hardware engineer's review\n\nYou are a hardware engineer reviewing device driver changes. If this patch touches driver or hardware-specific code, rigorously review register accesses, IRQ handling, DMA mapping/unmapping, memory barriers, and timing/delays. If the patch is purely generic software logic, output an empty concerns list.",
+            8 => "# Stage 8. Verification and severity estimation\n\nYou are the lead reviewer consolidating feedback from multiple specialized analysts. You will be given a list of concerns generated by different review stages.\n1. Deduplicate identical or overlapping concerns.\n2. Validate each concern. Discard all false positives.\n3. CRITICAL RULE: To discard a concern as a false positive, you MUST find concrete proof that explicitly invalidates the concern's reasoning.\n4. Assign a severity (low, medium, high, critical) to each remaining valid finding.",
+            9 => "# Stage 9. LKML-friendly report generation\n\nYou are an automated review bot generating a report for the Linux Kernel Mailing List (LKML). Convert the provided JSON findings into a polite, standard, inline-commented LKML email reply. Follow the formatting rules strictly. Do not use markdown headers or ALL CAPS shouting.",
+            10 => "# Stage 10. Fix generation\n\nYou are an expert kernel developer writing patches to fix bugs found during review. Generate git-formatted patches to address the provided findings.",
+            _ => "",
+        }
+    }
 }
 
 pub struct Worker {
@@ -440,7 +423,7 @@ impl Worker {
             match tokio::fs::read_to_string(&subsystem_md_path).await {
                 Ok(subsystem_md) => {
                     info!("Executing Phase 0: Pre-screening relevant subsystem guides.");
-                    let phase0_system = "You are an AI assistant preparing a Linux kernel patch review.\nReview the provided Patch and select all potentially relevant subsystem guides from the index below.\nCRITICAL BIAS RULE: You MUST err on the side of inclusion. Only exclude a guide if it is 100% irrelevant to the modified code. If there is any doubt, include the file.";
+                    let phase0_system = "You are an AI assistant preparing a code review.\nReview the provided Patch and select all potentially relevant subsystem guides from the index below.\nCRITICAL BIAS RULE: You MUST err on the side of inclusion. Only exclude a guide if it is 100% irrelevant to the modified code. If there is any doubt, include the file.";
                     let phase0_prompt = format!(
                         "<subsystem_guide_index>\n{}\n</subsystem_guide_index>\n\n<patch>\n{}\n</patch>",
                         subsystem_md, target_commit_diff

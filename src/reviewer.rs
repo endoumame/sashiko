@@ -110,7 +110,7 @@ impl Reviewer {
         let provider = create_provider(&settings).expect("Failed to create AI provider");
 
         // Initialize CacheManager
-        // Assuming prompts are in "third_party/prompts/kernel" in CWD.
+        // Prompts directory is configured via settings.review.prompts_dir or --prompts CLI arg.
         Self {
             db,
             settings,
