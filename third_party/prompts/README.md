@@ -1,6 +1,6 @@
 # Review Prompts for AI-Assisted Code Review
 
-AI-assisted code review prompts for Linux kernel, systemd, and iproute development.
+AI-assisted code review prompts for Linux kernel, systemd, iproute, and PHP development.
 Works with Claude Code and other AI tools.
 
 ## Quick Start
@@ -26,12 +26,20 @@ cd iproute/scripts
 ./claude-setup.sh
 ```
 
+### Install PHP Prompts Only
+
+```bash
+cd php/scripts
+./claude-setup.sh
+```
+
 ### Install All
 
 ```bash
 cd kernel/scripts && ./claude-setup.sh
 cd ../../systemd/scripts && ./claude-setup.sh
 cd ../../iproute/scripts && ./claude-setup.sh
+cd ../../php/scripts && ./claude-setup.sh
 ```
 
 ## Available Commands
@@ -41,12 +49,14 @@ cd ../../iproute/scripts && ./claude-setup.sh
 | Kernel | `/kreview` | `/kdebug` | `/kverify` |
 | systemd | `/systemd-review` | `/systemd-debug` | `/systemd-verify` |
 | iproute | `/iproute-review` | `/iproute-debug` | `/iproute-verify` |
+| PHP | `/php-review` | `/php-debug` | `/php-verify` |
 
 ## Project Documentation
 
 * [Kernel Review Prompts](kernel/README.md) - Linux kernel specific patterns and protocols
 * [systemd Review Prompts](systemd/README.md) - systemd specific patterns and protocols
 * [iproute Review Prompts](iproute/README.md) - iproute specific patterns and protocols
+* [PHP Review Prompts](php/README.md) - PHP specific patterns and protocols (Laravel, Symfony, WordPress)
 
 ## How It Works
 
@@ -59,6 +69,7 @@ The skills detect your working directory and load appropriate context:
 - In a kernel tree: kernel skill loads automatically
 - In a systemd tree: systemd skill loads automatically
 - In an iproute tree: iproute skill loads automatically
+- In a PHP project: PHP skill loads automatically
 
 ## Structure
 
@@ -84,6 +95,14 @@ review-prompts/
 │   ├── scripts/              # Setup script
 │   ├── patterns/             # Bug pattern documentation
 │   └── *.md                  # Subsystem and protocol files
+│
+├── php/                       # PHP prompts
+│   ├── skills/               # Skill template
+│   ├── slash-commands/       # /php-review, /php-debug, /php-verify
+│   ├── scripts/              # Setup script
+│   ├── patterns/             # Bug pattern documentation
+│   ├── subsystem/            # Framework guides (Laravel, Symfony, WordPress, etc.)
+│   └── *.md                  # Protocol and pattern files
 │
 └── README.md                  # This file
 ```
