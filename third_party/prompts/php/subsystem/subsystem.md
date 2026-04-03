@@ -1,28 +1,20 @@
-# PHP Subsystem / Framework Detection
+# PHP Subsystem Guide Index
 
-## Trigger Rules
+Select guides based on the code being reviewed:
 
-Scan the diff for these patterns and load the corresponding subsystem files.
+## Available Guides
 
-| Trigger Pattern | File to Load |
-|----------------|--------------|
-| `app/`, `Illuminate\`, Eloquent, Blade, Artisan, `routes/` | `laravel.md` |
-| `src/`, `Symfony\Component\`, Doctrine, Twig, `config/services` | `symfony.md` |
-| `wp_`, `add_action`, `add_filter`, `$wpdb`, `wp-content/` | `wordpress.md` |
-| `composer.json`, `autoload`, PSR-4, PSR-12 | `composer.md` |
-| PDO, MySQLi, query, migration, schema | `database.md` |
-| `test/`, `tests/`, PHPUnit, Pest, `@test`, `@dataProvider` | `testing.md` |
-| REST, API, JSON response, `JsonResponse`, endpoint | `api.md` |
-| `queue`, `job`, `dispatch`, `ShouldQueue`, worker | `queue.md` |
-| `auth`, `middleware`, `guard`, `policy`, `gate`, `voter` | `auth.md` |
-| `cache`, `redis`, `memcached`, `Cache::`, session | `caching.md` |
+### laravel.md
+Select when: Code uses Laravel framework (app/ directory, Illuminate namespace, Eloquent models, Blade templates, Artisan commands, routes/, migrations, service providers, middleware)
 
-## Multiple Matches
+### symfony.md
+Select when: Code uses Symfony framework (Symfony\Component namespace, Doctrine entities, Twig templates, services.yaml, security voters, Messenger handlers)
 
-If the diff touches multiple subsystems, load ALL matching files.
-Order of loading does not matter.
+### wordpress.md
+Select when: Code uses WordPress (wp_ prefixed functions, add_action/add_filter, $wpdb, wp-content directory, plugin/theme code, REST API endpoints)
 
-## No Match
+### composer.md
+Select when: Changes involve composer.json, autoloading configuration, PSR-4 namespaces, dependency management
 
-If no subsystem triggers match, the code is generic PHP. The core
-`technical-patterns.md` provides sufficient context for review.
+### testing.md
+Select when: Changes involve test files, PHPUnit, Pest, test assertions, mocking, fixtures, data providers
